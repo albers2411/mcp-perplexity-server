@@ -11,7 +11,7 @@ app = FastAPI(title="Monkey Test Server - Intelligent QA Agent")
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 # Usamos flash-latest que es la versión estable actual
-model = genai.GenerativeModel('gemini-flash-latest')
+model = genai.GenerativeModel('gemini-2.0-flash')
 
 
 @app.get("/health")
