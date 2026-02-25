@@ -1,11 +1,39 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-from typing import Optional, List, Literal
+from typing import Optional, Literal
 
 app = FastAPI(title="Perplexity MCP Test Server")
 
 
-# ----- MODELOS DE ENTRADA (lo que envía la APK) -----
+# ----- RUTA DE PRUEBA SIMPLE -----
+
+class TestActionRequest(BaseModel):
+    session_id: str
+    app_name: str
+
+
+class TestActionResponse(BaseModel):
+    action: Literal["tap", "input", "scroll", "back"]
+    target_element_id: Optional[str] = None
+    input_value_key: Optional[str] = None
+    scroll_direction: Optional[Literal["up", "down"]] = None
+    notes: str
+
+
+@app.post("/test_action", response_model=TestActionResponse)
+def test_action(payload: TestActionRequest):
+    """
+    RUTA DE PRUEBA: devuelve siempre la misma acción fija.
+    Úsala para simular la APK sin necesidad de JSON complejo.
+    """
+    return TestActionResponse(
+        action="tap",
+        target_element_id="button_login_123",
+        notes=f"¡PRUEBA OK! Simulando tap en app {payload.app_name}, sesión {payload.session_id}"
+    )
+
+
+# ----- ANTES (sin cambios) -----
 
 class Element(BaseModel):
     id: str
@@ -17,7 +45,7 @@ class Element(BaseModel):
     clickable: Optional[bool] = None
     enabled: Optional[bool] = None
     focused: Optional[bool] = None
-    bounds: Optional[List[int]] = None  # [left, top, right, bottom]
+    bounds: Optional[list] = None
 
 
 class HistoryItem(BaseModel):
@@ -42,27 +70,19 @@ class DecideActionRequest(BaseModel):
     device_info: dict
     app_under_test: str
     screen: Screen
-    elements: List[Element]
-    history: List[HistoryItem]
+    elements: list[Element]
+    history: list[HistoryItem]
     data_rules_summary: dict
     constraints: Constraints
 
 
-# ----- MODELOS DE SALIDA (acción que vuelve a la APK) -----
-
-ActionType = Literal["tap", "input", "scroll", "back", "wait", "terminate"]
-ScrollDirection = Literal["up", "down"]
-
-
 class DecideActionResponse(BaseModel):
-    action: ActionType
+    action: Literal["tap", "input", "scroll", "back", "wait", "terminate"]
     target_element_id: Optional[str] = None
     input_value_key: Optional[str] = None
-    scroll_direction: Optional[ScrollDirection] = None
+    scroll_direction: Optional[Literal["up", "down"]] = None
     notes: Optional[str] = None
 
-
-# ----- ENDPOINTS -----
 
 @app.get("/health")
 def health_check():
@@ -73,17 +93,13 @@ def health_check():
 def decide_action(payload: DecideActionRequest):
     """
     Por ahora: lógica de ejemplo (no usa Perplexity aún).
-    Solo demuestra el formato de entrada/salida.
     """
-
-    # Si ya hemos llegado al máximo de pasos, terminamos
     if payload.constraints.current_step >= payload.constraints.max_steps:
         return DecideActionResponse(
             action="terminate",
-            notes="Se alcanzó el máximo de pasos configurado en constraints."
+            notes="Se alcanzó el máximo de pasos configurado."
         )
 
-    # Intentar encontrar un botón 'Login' como ejemplo
     for el in payload.elements:
         if el.clickable and (el.text and "login" in el.text.lower()):
             return DecideActionResponse(
@@ -92,10 +108,8 @@ def decide_action(payload: DecideActionRequest):
                 notes="Ejemplo: pulsar botón con texto 'Login'."
             )
 
-    # Si hay algún campo de texto y hay alguna regla de datos, hacer input de ejemplo
     for el in payload.elements:
         if el.role == "input" and payload.data_rules_summary:
-            # Coger la primera clave de data_rules_summary
             first_key = list(payload.data_rules_summary.keys())[0]
             return DecideActionResponse(
                 action="input",
@@ -104,7 +118,6 @@ def decide_action(payload: DecideActionRequest):
                 notes=f"Ejemplo: rellenar input con la clave {first_key}."
             )
 
-    # Si no encontramos nada especial, hacer scroll hacia abajo como ejemplo
     return DecideActionResponse(
         action="scroll",
         scroll_direction="down",
