@@ -1,79 +1,39 @@
+import os
+import google.generativeai as genai
 from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import Optional, Literal
 
-app = FastAPI(title="Perplexity MCP Test Server")
+app = FastAPI(title="Monkey Test Server - Gemini FREE")
+
+# Configurar Gemini (API key gratuita)
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 
-# ----- RUTA DE PRUEBA SIMPLE -----
-
-class TestActionRequest(BaseModel):
-    session_id: str
-    app_name: str
-
-
-class TestActionResponse(BaseModel):
-    action: Literal["tap", "input", "scroll", "back"]
-    target_element_id: Optional[str] = None
-    input_value_key: Optional[str] = None
-    scroll_direction: Optional[Literal["up", "down"]] = None
-    notes: str
+# Rutas de prueba (sin cambios)
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "gemini_ready": True}
 
 
-@app.post("/test_action", response_model=TestActionResponse)
-def test_action(payload: TestActionRequest):
-    """
-    RUTA DE PRUEBA: devuelve siempre la misma acción fija.
-    Úsala para simular la APK sin necesidad de JSON complejo.
-    """
-    return TestActionResponse(
-        action="tap",
-        target_element_id="button_login_123",
-        notes=f"¡PRUEBA OK! Simulando tap en app {payload.app_name}, sesión {payload.session_id}"
-    )
+@app.post("/test_action")
+def test_action(payload: dict):
+    return {
+        "action": "tap",
+        "target_element_id": "button_login_123",
+        "notes": f"¡PRUEBA OK! {payload}"
+    }
 
 
-# ----- ANTES (sin cambios) -----
-
-class Element(BaseModel):
-    id: str
-    text: Optional[str] = None
-    content_desc: Optional[str] = None
-    class_name: Optional[str] = None
-    role: Optional[str] = None
-    package_name: Optional[str] = None
-    clickable: Optional[bool] = None
-    enabled: Optional[bool] = None
-    focused: Optional[bool] = None
-    bounds: Optional[list] = None
-
-
-class HistoryItem(BaseModel):
-    step: int
-    action: str
-    target_app: Optional[str] = None
-
-
-class Screen(BaseModel):
-    activity_name: Optional[str] = None
-    title: Optional[str] = None
-    url_like: Optional[str] = None
-
-
-class Constraints(BaseModel):
-    max_steps: int
-    current_step: int
-
+# ----- CONTRACTO APK -----
 
 class DecideActionRequest(BaseModel):
     session_id: str
-    device_info: dict
     app_under_test: str
-    screen: Screen
-    elements: list[Element]
-    history: list[HistoryItem]
+    elements: list[dict]
     data_rules_summary: dict
-    constraints: Constraints
+    constraints: dict
 
 
 class DecideActionResponse(BaseModel):
@@ -84,42 +44,54 @@ class DecideActionResponse(BaseModel):
     notes: Optional[str] = None
 
 
-@app.get("/health")
-def health_check():
-    return {"status": "ok"}
-
-
 @app.post("/decide_action", response_model=DecideActionResponse)
 def decide_action(payload: DecideActionRequest):
     """
-    Por ahora: lógica de ejemplo (no usa Perplexity aún).
+    GEMINI IA GRATUITA decide la acción inteligente.
     """
-    if payload.constraints.current_step >= payload.constraints.max_steps:
+
+    # Resumir elementos para Gemini
+    elements_text = "\n".join([
+        f"• ID:{el['id']} Texto:'{el.get('text', '')}' Rol:{el.get('role', 'desconocido')} Clickable:{el.get('clickable', False)}"
+        for el in payload.elements[:8]
+    ])
+
+    prompt = f"""
+Explora esta app Android: {payload.app_under_test}
+
+Elementos en pantalla:
+{elements_text}
+
+Datos para campos:
+{payload.data_rules_summary}
+
+DECIDE UNA ACCIÓN como usuario real. Responde SOLO JSON:
+
+{{
+  "action": "tap|input|scroll|back|terminate",
+  "target_element_id": "ID_exacto",
+  "input_value_key": "clave_data_rules",
+  "notes": "razón"
+}}
+
+Prioridades: Login > campos input > scroll > back
+"""
+
+    try:
+        response = model.generate_content(prompt)
+        ai_text = response.text.strip()
+
+        # Extraer JSON
+        import json, re
+        json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', ai_text)
+        if json_match:
+            return DecideActionResponse(**json.loads(json_match.group()))
+        else:
+            return DecideActionResponse(
+                action="scroll", scroll_direction="down",
+                notes="Gemini OK pero parseo falló"
+            )
+    except Exception as e:
         return DecideActionResponse(
-            action="terminate",
-            notes="Se alcanzó el máximo de pasos configurado."
+            action="back", notes=f"Error: {str(e)}"
         )
-
-    for el in payload.elements:
-        if el.clickable and (el.text and "login" in el.text.lower()):
-            return DecideActionResponse(
-                action="tap",
-                target_element_id=el.id,
-                notes="Ejemplo: pulsar botón con texto 'Login'."
-            )
-
-    for el in payload.elements:
-        if el.role == "input" and payload.data_rules_summary:
-            first_key = list(payload.data_rules_summary.keys())[0]
-            return DecideActionResponse(
-                action="input",
-                target_element_id=el.id,
-                input_value_key=first_key,
-                notes=f"Ejemplo: rellenar input con la clave {first_key}."
-            )
-
-    return DecideActionResponse(
-        action="scroll",
-        scroll_direction="down",
-        notes="Ejemplo: no hay acción clara, hacemos scroll hacia abajo."
-    )
